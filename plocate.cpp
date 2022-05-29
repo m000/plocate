@@ -958,7 +958,7 @@ int main(int argc, char **argv)
 			needle.re = compile_regex(needle.str);
 		} else if (any_wildcard) {
 			needle.type = Needle::GLOB;
-		} else if (ignore_case) {
+		} else if (ignore_case && false) {
 			// strcasestr() doesn't handle locales correctly (even though LSB
 			// claims it should), but somehow, fnmatch() does, and it's about
 			// the same speed as using a regex.

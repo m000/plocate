@@ -13,6 +13,7 @@ uringdep = dependency('liburing', required: false)
 zstddep = dependency('libzstd')
 threaddep = dependency('threads')
 atomicdep = cxx.find_library('atomic', required: false)
+icudep = dependency('icu-i18n')
 
 if not uringdep.found()
 	add_project_arguments('-DWITHOUT_URING', language: 'cpp')
@@ -31,16 +32,16 @@ if cxx.compiles(code, name: 'function multiversioning')
 endif
 
 executable('plocate', ['plocate.cpp', 'io_uring_engine.cpp', 'turbopfor.cpp', 'parse_trigrams.cpp', 'serializer.cpp', 'access_rx_cache.cpp', 'needle.cpp', 'complete_pread.cpp'],
-	dependencies: [uringdep, zstddep, threaddep, atomicdep],
+	dependencies: [uringdep, zstddep, threaddep, atomicdep, icudep],
 	install: true,
 	install_mode: ['rwxr-sr-x', 'root', get_option('locategroup')])
 executable('plocate-build', ['plocate-build.cpp', 'database-builder.cpp'],
-	dependencies: [zstddep],
+	dependencies: [zstddep, icudep],
 	install: true,
 	install_dir: get_option('sbindir'))
 updatedb_progname = get_option('updatedb_progname')
 executable(updatedb_progname, ['updatedb.cpp', 'database-builder.cpp', 'conf.cpp', 'lib.cpp', 'bind-mount.cpp', 'complete_pread.cpp'],
-	dependencies: [zstddep, threaddep],
+	dependencies: [zstddep, threaddep, icudep],
 	install: true,
 	install_dir: get_option('sbindir'))
 

@@ -17,6 +17,8 @@
 #include <unistd.h>
 #include <zdict.h>
 #include <zstd.h>
+#include <unicode/coll.h>
+#include <unicode/locid.h>
 
 #define P4NENC_BOUND(n) ((n + 127) / 128 + (n + 32) * sizeof(uint32_t))
 
@@ -302,6 +304,52 @@ void EncodingCorpus::flush_block()
 
 	uint32_t docid = num_blocks;
 
+	// Oh, ICU...
+	vector<uint8_t> sort_key;
+	sort_key.resize(32);
+        int32_t num_locales;
+        const icu::Locale* locales = icu::Collator::getAvailableLocales(num_locales);
+        for (int i = 0; i < num_locales; ++i) {
+                const icu::Locale &loc = locales[i];
+		if (strcmp(loc.getName(), "en_US_POSIX") == 0) {
+			continue;  // Too weird.
+		}
+                UErrorCode status = U_ZERO_ERROR;
+		icu::Collator *coll = icu::Collator::createInstance(loc, status);
+		if (U_FAILURE(status)) {
+			fprintf(stderr, "ERROR: Failed to create collator\n");
+			exit(1);
+		}
+		coll->setStrength(icu::Collator::PRIMARY);
+		const char *ptr = current_block.c_str();
+		const char *end = ptr + current_block.size();
+		while (ptr < end) {
+			size_t len = strlen(ptr);
+			int32_t sortkey_len;
+			for ( ;; ) {
+				sortkey_len = coll->getSortKey(icu::UnicodeString::fromUTF8(icu::StringPiece(ptr, len)), sort_key.data(), sort_key.size());
+				if (sortkey_len < sort_key.size()) {  // Note <, not <=; we need to keep a slop byte.
+					break;
+				}
+				sort_key.resize(sortkey_len * 3 / 2);
+			}
+
+			const uint8_t *keyptr = &sort_key[0];
+			const uint8_t *keyend = keyptr + sortkey_len;
+			while (keyptr < keyend - 3) {
+				// NOTE: Will read one byte past the end of the trigram, but it's OK,
+				// since we always call it from contexts where there's a terminating zero byte.
+				uint32_t trgm;
+				memcpy(&trgm, keyptr, sizeof(trgm));
+				++keyptr;
+				trgm = le32toh(trgm);
+				add_docid(trgm & 0xffffff, docid);
+			}
+
+			ptr += len + 1;
+		}
+        }
+#if 0
 	// Create trigrams.
 	const char *ptr = current_block.c_str();
 	const char *end = ptr + current_block.size();
@@ -335,6 +383,7 @@ void EncodingCorpus::flush_block()
 			}
 		}
 	}
+#endif
 
 	// Compress and add the filename block.
 	filename_blocks.push_back(outfp_pos);

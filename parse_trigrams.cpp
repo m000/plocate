@@ -1,11 +1,14 @@
 #include "parse_trigrams.h"
 
+#include "dprintf.h"
 #include "unique_sort.h"
 
 #include <assert.h>
 #include <memory>
 #include <string.h>
 #include <wctype.h>
+
+#include <unicode/coll.h>
 
 using namespace std;
 
@@ -284,6 +287,38 @@ void parse_trigrams_ignore_case(const string &needle, vector<TrigramDisjunction>
 
 void parse_trigrams(const string &needle, bool ignore_case, vector<TrigramDisjunction> *trigram_groups)
 {
+	// ICU...
+	string needle2;
+	for (char ch : needle) {
+		if (ch != '*') needle2.push_back(ch);
+	}
+
+	dprintf("posix locale = %s\n", setlocale(LC_CTYPE, NULL));
+	icu::Locale locale = icu::Locale::createCanonical(setlocale(LC_CTYPE, NULL));
+	dprintf("icu locale = %s\n", locale.getName());
+	UErrorCode status = U_ZERO_ERROR;
+	icu::Collator *coll = icu::Collator::createInstance(locale, status);
+	// FIXME check for failure
+	uint8_t needlebuf[1024];  // FIXME
+	coll->setStrength(icu::Collator::PRIMARY);
+	int len = coll->getSortKey(icu::UnicodeString::fromUTF8(needle2), needlebuf, sizeof(needlebuf));
+	dprintf("needlelen = %d (from ascii %zu, needle '%s')\n", len, needle2.size(), needle2.c_str());
+	for (size_t i = 0; i < len; ++i) {
+		dprintf(" %02x", needlebuf[i]);
+	}
+	dprintf("\n");
+	for (size_t i = 0; i < len - 3; ++i) {
+		uint32_t trgm = needlebuf[i] | (needlebuf[i + 1] << 8) | (needlebuf[i + 2] << 16);
+		dprintf("trgm = %06x\n", trgm);
+
+		TrigramDisjunction new_pt;
+		new_pt.remaining_trigrams_to_read = 1;
+		new_pt.trigram_alternatives.push_back(trgm);
+		new_pt.max_num_docids = 0;
+		trigram_groups->push_back(move(new_pt));
+	}
+	return;
+
 	if (ignore_case) {
 		parse_trigrams_ignore_case(needle, trigram_groups);
 		return;
