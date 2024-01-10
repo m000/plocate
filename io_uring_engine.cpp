@@ -138,10 +138,12 @@ void IOUringEngine::finish()
 #ifndef WITHOUT_URING
 	bool anything_to_submit = true;
 	while (pending_reads > 0) {
+		dprintf("io_uring engine shutting down: %d pending reads\n", pending_reads);
 		io_uring_cqe *cqe;
 		if (io_uring_peek_cqe(&ring, &cqe) != 0) {
 			if (anything_to_submit) {
 				// Nothing ready, so submit whatever is pending and then do a blocking wait.
+				dprintf("no completion events in queue. submitting pending...\n");
 				int ret = io_uring_submit_and_wait(&ring, 1);
 				if (ret < 0) {
 					fprintf(stderr, "io_uring_submit(queued): %s\n", strerror(-ret));
@@ -149,6 +151,7 @@ void IOUringEngine::finish()
 				}
 				anything_to_submit = false;
 			} else {
+				dprintf("no completion events in queue. waiting...\n");
 				int ret = io_uring_wait_cqe(&ring, &cqe);
 				if (ret < 0) {
 					fprintf(stderr, "io_uring_wait_cqe: %s\n", strerror(-ret));
@@ -158,52 +161,21 @@ void IOUringEngine::finish()
 		}
 
 		unsigned head;
+		dprintf("processing cqe before shutdown...\n");
 		io_uring_for_each_cqe(&ring, head, cqe)
 		{
 			PendingRead *pending = reinterpret_cast<PendingRead *>(cqe->user_data);
-			if (pending->op == OP_STAT) {
-				io_uring_cqe_seen(&ring, cqe);
-				--pending_reads;
-
-				size_t old_pending_reads = pending_reads;
-				pending->stat_cb(cqe->res == 0);
-				free(pending->stat.pathname);
-				delete pending->stat.buf;
-				delete pending;
-
-				if (pending_reads != old_pending_reads) {
-					// A new read was made in the callback (and not queued),
-					// so we need to re-submit.
-					anything_to_submit = true;
-				}
-			} else {
-				if (cqe->res <= 0) {
-					fprintf(stderr, "async read failed: %s\n", strerror(-cqe->res));
-					exit(1);
-				}
-
-				if (size_t(cqe->res) < pending->read.iov.iov_len) {
-					// Incomplete read, so resubmit it.
-					pending->read.iov.iov_base = (char *)pending->read.iov.iov_base + cqe->res;
-					pending->read.iov.iov_len -= cqe->res;
-					pending->read.offset += cqe->res;
-					io_uring_cqe_seen(&ring, cqe);
-
-					io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-					if (sqe == nullptr) {
-						fprintf(stderr, "No free SQE for resubmit; this shouldn't happen.\n");
-						exit(1);
-					}
-					io_uring_prep_readv(sqe, pending->read.fd, &pending->read.iov, 1, pending->read.offset);
-					io_uring_sqe_set_data(sqe, pending);
-					anything_to_submit = true;
-				} else {
+			switch (pending->op) {
+				case OP_STAT:
+				{
+					dprintf("finished stat for %s.\n", pending->stat.pathname);
 					io_uring_cqe_seen(&ring, cqe);
 					--pending_reads;
 
 					size_t old_pending_reads = pending_reads;
-					pending->read_cb(string_view(reinterpret_cast<char *>(pending->read.buf), pending->read.len));
-					free(pending->read.buf);
+					pending->stat_cb(cqe->res == 0);
+					free(pending->stat.pathname);
+					delete pending->stat.buf;
 					delete pending;
 
 					if (pending_reads != old_pending_reads) {
@@ -211,6 +183,52 @@ void IOUringEngine::finish()
 						// so we need to re-submit.
 						anything_to_submit = true;
 					}
+					break;
+				}
+				case OP_READ:
+				{
+					if (cqe->res <= 0) {
+						fprintf(stderr, "async read failed: %s\n", strerror(-cqe->res));
+						exit(1);
+					}
+
+					dprintf("read %zu/%zu for %d@%jd.\n", cqe->res, pending->read.iov.iov_len, pending->read.fd, pending->read.offset);
+					if (size_t(cqe->res) < pending->read.iov.iov_len) {
+						// Incomplete read, so resubmit it.
+						pending->read.iov.iov_base = (char *)pending->read.iov.iov_base + cqe->res;
+						pending->read.iov.iov_len -= cqe->res;
+						pending->read.offset += cqe->res;
+						io_uring_cqe_seen(&ring, cqe);
+
+						io_uring_sqe *sqe = io_uring_get_sqe(&ring);
+						if (sqe == nullptr) {
+							fprintf(stderr, "No free SQE for resubmit; this shouldn't happen.\n");
+							exit(1);
+						}
+						io_uring_prep_readv(sqe, pending->read.fd, &pending->read.iov, 1, pending->read.offset);
+						io_uring_sqe_set_data(sqe, pending);
+						anything_to_submit = true;
+					} else {
+						io_uring_cqe_seen(&ring, cqe);
+						--pending_reads;
+
+						size_t old_pending_reads = pending_reads;
+						pending->read_cb(string_view(reinterpret_cast<char *>(pending->read.buf), pending->read.len));
+						free(pending->read.buf);
+						delete pending;
+
+						if (pending_reads != old_pending_reads) {
+							// A new read was made in the callback (and not queued),
+							// so we need to re-submit.
+							anything_to_submit = true;
+						}
+					}
+					break;
+				}
+				default:
+				{
+					fprintf(stderr, "io_uring_for_each_cqe encountered unknown op: %d\n", pending->op);
+					exit(1);
 				}
 			}
 		}

@@ -14,7 +14,7 @@ zstddep = dependency('libzstd')
 threaddep = dependency('threads')
 atomicdep = cxx.find_library('atomic', required: false)
 
-if not uringdep.found()
+if get_option('without_uring') or not uringdep.found()
 	add_project_arguments('-DWITHOUT_URING', language: 'cpp')
 endif
 if cxx.has_header('endian.h')
