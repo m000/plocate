@@ -555,6 +555,7 @@ uint64_t do_search_file(const vector<Needle> &needles, const std::string &filena
 	// Look them all up on disk.
 	bool should_early_exit = false;
 	for (auto &[trgm, trigram_groups] : trigrams_to_lookup) {
+		dprintf("looking up trigram %s...\n", print_trigram(trgm).c_str());
 		corpus.find_trigram(trgm, [trgm{ trgm }, trigram_groups{ &trigram_groups }, &should_early_exit](const Trigram *trgmptr, size_t len) {
 			if (trgmptr == nullptr) {
 				dprintf("trigram %s isn't found\n", print_trigram(trgm).c_str());
@@ -581,6 +582,7 @@ uint64_t do_search_file(const vector<Needle> &needles, const std::string &filena
 				}
 				return;
 			}
+			dprintf("FOUND trigram %s!\n", print_trigram(trgm).c_str());
 			for (TrigramDisjunction *td : *trigram_groups) {
 				--td->remaining_trigrams_to_read;
 				td->max_num_docids += trgmptr->num_docids;
@@ -621,7 +623,9 @@ uint64_t do_search_file(const vector<Needle> &needles, const std::string &filena
 	unordered_set<uint32_t> trigrams_submitted_read;
 	vector<uint32_t> cur_candidates, tmp, decoded;
 	bool done = false;
+	dprintf("Ready to process trigrams...\n");
 	for (TrigramDisjunction &td : trigram_groups) {
+		dprintf("processing trigram group %s...\n", print_td(td).c_str());
 		if (!cur_candidates.empty() && td.max_num_docids > cur_candidates.size() * 100) {
 			dprintf("%s has up to %u entries, ignoring the rest (will "
 			        "weed out false positives later)\n",
@@ -675,7 +679,9 @@ uint64_t do_search_file(const vector<Needle> &needles, const std::string &filena
 			});
 		}
 	}
+	dprintf("Finished processing trigrams. Terminating engine...\n");
 	engine.finish();
+	dprintf("Engine terminated.\n");
 	if (done) {
 		return 0;
 	}
